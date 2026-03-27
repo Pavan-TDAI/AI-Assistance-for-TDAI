@@ -1,0 +1,18 @@
+{
+  "name": "@personal-ai/local-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@personal-ai/shared": "workspace:*",
+    "@personal-ai/tool-registry": "workspace:*",
+    "playwright": "^1.49.1",
+    "zod": "^3.24.1"
+  }
+}

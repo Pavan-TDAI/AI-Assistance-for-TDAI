@@ -1,0 +1,21 @@
+node_modules
+.next
+.next-dev
+dist
+coverage
+.turbo
+.vercel
+playwright-report
+test-results
+.env
+.env.local
+.env.*.local
+apps/web/.next
+apps/web/.next-dev
+apps/web/out
+apps/server/Downloads
+.local-vault
+*.log
+client_secret*.json
+*.credentials.json
+AI Work Intelligence Assistant for TDAI.pdf
