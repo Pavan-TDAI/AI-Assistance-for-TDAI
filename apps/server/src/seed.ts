@@ -22,6 +22,7 @@ const seed = async () => {
       sessionId: session.id,
       conversationId: conversation.id,
       role: "assistant",
+      attachments: [],
       content:
         "Welcome to your local-first AI agent. Add your OpenAI or Gemini API key in apps/server/.env, then ask me to inspect files, browse, or help organize your work."
     });

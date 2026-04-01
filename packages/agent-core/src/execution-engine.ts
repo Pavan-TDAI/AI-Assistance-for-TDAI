@@ -1,6 +1,7 @@
 import {
   nowIso,
   toErrorMessage,
+  type MessageAttachment,
   type MessageRecord,
   type RunStatus,
   type RunUsage,
@@ -20,9 +21,41 @@ import type {
   RunEventSink
 } from "./types.js";
 
+const renderAttachmentContext = (attachments: MessageAttachment[]) => {
+  if (!attachments.length) {
+    return "";
+  }
+
+  return [
+    "[Uploaded attachments]",
+    ...attachments.map((attachment, index) =>
+      [
+        `${index + 1}. ${attachment.fileName}`,
+        `Path: ${attachment.storagePath}`,
+        `Type: ${attachment.mimeType}`,
+        `Size: ${attachment.sizeBytes} bytes`,
+        attachment.extractedTextPreview
+          ? `Preview: ${attachment.extractedTextPreview}`
+          : "Preview: No extracted text preview was available."
+      ].join("\n")
+    )
+  ].join("\n\n");
+};
+
+const buildMessageContentForModel = (message: MessageRecord) => {
+  if (!message.attachments.length) {
+    return message.content;
+  }
+
+  const attachmentContext = renderAttachmentContext(message.attachments);
+  return message.content.trim()
+    ? `${message.content}\n\n${attachmentContext}`
+    : attachmentContext;
+};
+
 const toConversationItem = (message: MessageRecord): ProviderConversationItem => ({
   role: message.role,
-  content: message.content,
+  content: buildMessageContentForModel(message),
   toolName: message.toolName,
   toolCallId: message.toolCallId
 });
@@ -74,7 +107,9 @@ const trimMessagesToBudget = (
 const buildHeuristicSummary = (messages: MessageRecord[]) =>
   messages
     .slice(-12)
-    .map((message) => `${message.role}: ${message.content.replace(/\s+/g, " ").trim()}`)
+    .map((message) =>
+      `${message.role}: ${buildMessageContentForModel(message).replace(/\s+/g, " ").trim()}`
+    )
     .join("\n")
     .slice(0, 2400);
 
@@ -96,7 +131,7 @@ Preserve goals, decisions, paths, approvals, blocked items, and important file o
 
 Conversation:
 ${messages
-  .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
+  .map((message) => `${message.role.toUpperCase()}: ${buildMessageContentForModel(message)}`)
   .join("\n\n")}
 `;
 
@@ -245,7 +280,8 @@ export class AgentExecutionEngine {
       conversationId: input.conversationId,
       runId: input.runId,
       role: "assistant",
-      content: planText
+      content: planText,
+      attachments: []
     });
 
     await eventSink.publish({
@@ -468,7 +504,8 @@ export class AgentExecutionEngine {
             conversationId: input.conversationId,
             runId: input.runId,
             role: "assistant",
-            content: assistantText
+            content: assistantText,
+            attachments: []
           });
 
           await db.createMemory({
@@ -682,12 +719,13 @@ export class AgentExecutionEngine {
               summary: outcome.result.summary
             })) as ToolCallRecord;
 
-            await db.createMessage({
+            const toolMessage = await db.createMessage({
               sessionId: input.sessionId,
               conversationId: input.conversationId,
               runId: input.runId,
               role: "tool",
               content: JSON.stringify(outcome.result.output),
+              attachments: [],
               toolName: requestedToolCall.name,
               toolCallId: requestedToolCall.id
             });
@@ -718,7 +756,8 @@ export class AgentExecutionEngine {
               sessionId: input.sessionId,
               conversationId: input.conversationId,
               timestamp: nowIso(),
-              toolCall: successfulToolCall
+              toolCall: successfulToolCall,
+              message: toolMessage
             });
           } catch (error) {
             const message = toErrorMessage(error);
@@ -727,7 +766,7 @@ export class AgentExecutionEngine {
               error: message
             })) as ToolCallRecord;
 
-            await db.createMessage({
+            const toolMessage = await db.createMessage({
               sessionId: input.sessionId,
               conversationId: input.conversationId,
               runId: input.runId,
@@ -735,6 +774,7 @@ export class AgentExecutionEngine {
               content: JSON.stringify({
                 error: message
               }),
+              attachments: [],
               toolName: requestedToolCall.name,
               toolCallId: requestedToolCall.id
             });
@@ -767,7 +807,8 @@ export class AgentExecutionEngine {
               sessionId: input.sessionId,
               conversationId: input.conversationId,
               timestamp: nowIso(),
-              toolCall: failedToolCall
+              toolCall: failedToolCall,
+              message: toolMessage
             });
           }
         }

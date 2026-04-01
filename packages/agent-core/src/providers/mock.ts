@@ -116,6 +116,78 @@ const inferToolCall = (message: string): ProviderToolCall | null => {
     };
   }
 
+  if (
+    lower.includes("wbr") ||
+    lower.includes("weekly business report") ||
+    lower.includes("pending blockers") ||
+    lower.includes("resolved blockers") ||
+    lower.includes("completed vs pending") ||
+    lower.includes("daily updates") ||
+    lower.includes("today's extracted updates") ||
+    lower.includes("todays extracted updates")
+  ) {
+    return {
+      id: createId("call"),
+      name: "reports.query_table",
+      input: {
+        query: message
+      }
+    };
+  }
+
+  if (
+    lower.includes("campaign") ||
+    lower.includes("customer outreach") ||
+    lower.includes("email campaign")
+  ) {
+    return {
+      id: createId("call"),
+      name: "workflow.generate_campaign",
+      input: {
+        brief: message,
+        goals: ["Generate outreach messaging", "Prepare a reusable campaign draft"]
+      }
+    };
+  }
+
+  if (
+    lower.includes("proposal") ||
+    lower.includes("benchmark") ||
+    lower.includes("market benchmarking")
+  ) {
+    return {
+      id: createId("call"),
+      name: "workflow.generate_proposal",
+      input: {
+        prompt: message
+      }
+    };
+  }
+
+  if (
+    lower.includes("digital transformation") ||
+    lower.includes("solution") ||
+    lower.includes("tdai")
+  ) {
+    return {
+      id: createId("call"),
+      name: "workflow.generate_solution",
+      input: {
+        prompt: message
+      }
+    };
+  }
+
+  if (lower.includes("list artifacts") || lower.includes("show artifacts")) {
+    return {
+      id: createId("call"),
+      name: "workflow.list_artifacts",
+      input: {
+        limit: 8
+      }
+    };
+  }
+
   return null;
 };
 
@@ -163,6 +235,48 @@ const summariseToolContent = (item: ProviderConversationItem) => {
 
     if (item.toolName === "meetings.send_email") {
       return "I sent the MoM email for the selected meeting.";
+    }
+
+    if (item.toolName === "reports.query_table") {
+      const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+      return `I generated the "${String(parsed.title ?? "report")}" table with ${rows.length} row(s).`;
+    }
+
+    if (item.toolName === "reports.ingest_update_email") {
+      const update = parsed.update as { employeeName?: string } | undefined;
+      return `I processed the update email for ${String(update?.employeeName ?? "the employee")}.`;
+    }
+
+    if (item.toolName === "reports.sync_update_emails") {
+      return `I synced ${String(parsed.syncedCount ?? 0)} update email(s) and skipped ${String(
+        parsed.skippedCount ?? 0
+      )}.`;
+    }
+
+    if (
+      item.toolName === "workflow.generate_campaign" ||
+      item.toolName === "workflow.generate_proposal" ||
+      item.toolName === "workflow.generate_solution"
+    ) {
+      const artifact = parsed.artifact as { title?: string; kind?: string } | undefined;
+      return `I generated the ${String(artifact?.kind ?? "workflow")} artifact "${String(
+        artifact?.title ?? "Untitled artifact"
+      )}".`;
+    }
+
+    if (item.toolName === "workflow.list_artifacts") {
+      const artifacts = Array.isArray(parsed.artifacts) ? parsed.artifacts : [];
+      return `I found ${artifacts.length} stored workflow artifact(s).`;
+    }
+
+    if (
+      item.toolName === "workflow.draft_artifact_email" ||
+      item.toolName === "workflow.send_artifact_email"
+    ) {
+      const artifact = parsed.artifact as { title?: string } | undefined;
+      return item.toolName === "workflow.send_artifact_email"
+        ? `I sent the artifact "${String(artifact?.title ?? "artifact")}" by email.`
+        : `I created an email draft for "${String(artifact?.title ?? "artifact")}".`;
     }
 
     if (item.toolName?.startsWith("browser.")) {

@@ -268,7 +268,7 @@ export const MeetingStudio = () => {
             <button
               type="button"
               onClick={() => void generateMom()}
-              className="surface-elevated inline-flex items-center gap-2 rounded-2xl bg-signal px-4 py-2 text-sm text-white"
+              className="button-success !rounded-2xl !px-4 !py-2 text-sm"
             >
               {saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               Generate MoM
@@ -515,7 +515,7 @@ export const MeetingStudio = () => {
                       <button
                         type="button"
                         onClick={() => void sendEmail()}
-                        className="surface-elevated inline-flex items-center gap-2 rounded-2xl bg-ink px-4 py-2 text-sm text-white"
+                        className="button-primary !rounded-2xl !px-4 !py-2 text-sm"
                       >
                         <Send className="h-4 w-4" />
                         Send email

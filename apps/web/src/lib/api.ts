@@ -6,21 +6,27 @@ import type {
   ConnectorStatusRecord,
   CreateMeetingRequest,
   DraftMeetingEmailRequest,
+  ExportTableRequest,
   GenerateMeetingMomRequest,
   GoogleWorkspaceConnectorSecret,
   Microsoft365ConnectorSecret,
   HealthResponse,
   HistorySnapshot,
+  IngestUpdateEmailRequest,
   LoginRequest,
   MeetingRecord,
   PromptRequest,
   PromptResponse,
+  ReportFilters,
+  ReportTable,
+  ReportQueryRequest,
   RegisterRequest,
   RunEvent,
   SessionBundle,
   SessionWithPreview,
   SettingsRecord,
-  SettingsUpdate
+  SettingsUpdate,
+  SyncUpdateEmailsRequest
 } from "@personal-ai/shared";
 
 import { clearStoredAccessToken, getStoredAccessToken } from "./auth-storage";
@@ -57,6 +63,33 @@ const fetchJson = async <T>(input: string, init?: RequestInit): Promise<T> => {
   return (await response.json()) as T;
 };
 
+const fetchBlob = async (
+  input: string,
+  init?: RequestInit
+): Promise<{ blob: Blob; filename: string | null }> => {
+  const response = await fetch(`${API_BASE_URL}${input}`, {
+    ...init,
+    headers: withAuthHeaders(init?.headers),
+    cache: "no-store"
+  });
+
+  if (response.status === 401) {
+    clearStoredAccessToken();
+  }
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error ?? `Request failed with status ${response.status}.`);
+  }
+
+  const disposition = response.headers.get("content-disposition");
+  const filenameMatch = disposition?.match(/filename="([^"]+)"/i);
+  return {
+    blob: await response.blob(),
+    filename: filenameMatch?.[1] ?? null
+  };
+};
+
 const querySessions = (options?: { includeArchived?: boolean; archivedOnly?: boolean }) => {
   const params = new URLSearchParams();
   if (options?.includeArchived) {
@@ -67,6 +100,35 @@ const querySessions = (options?: { includeArchived?: boolean; archivedOnly?: boo
   }
   const query = params.toString();
   return `/api/sessions${query ? `?${query}` : ""}`;
+};
+
+const reportQueryString = (filters?: ReportFilters) => {
+  const params = new URLSearchParams();
+  if (!filters) {
+    return "";
+  }
+
+  if (filters.employeeName) {
+    params.set("employeeName", filters.employeeName);
+  }
+  if (filters.startDate) {
+    params.set("startDate", filters.startDate);
+  }
+  if (filters.endDate) {
+    params.set("endDate", filters.endDate);
+  }
+  if (filters.weekStartDate) {
+    params.set("weekStartDate", filters.weekStartDate);
+  }
+  if (filters.blockerStatus) {
+    params.set("blockerStatus", filters.blockerStatus);
+  }
+  if (filters.search) {
+    params.set("search", filters.search);
+  }
+
+  const query = params.toString();
+  return query ? `?${query}` : "";
 };
 
 export const api = {
@@ -128,6 +190,44 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  sendPromptWithAttachments: async (payload: {
+    sessionId?: string;
+    content: string;
+    selectedMeetingId?: string;
+    attachments: File[];
+  }) => {
+    const formData = new FormData();
+    if (payload.sessionId) {
+      formData.set("sessionId", payload.sessionId);
+    }
+    formData.set("content", payload.content);
+    if (payload.selectedMeetingId) {
+      formData.set("selectedMeetingId", payload.selectedMeetingId);
+    }
+    for (const attachment of payload.attachments) {
+      formData.append("attachments", attachment);
+    }
+
+    const response = await fetch(`${API_BASE_URL}/api/chat/send-with-attachments`, {
+      method: "POST",
+      headers: withAuthHeaders(),
+      body: formData,
+      cache: "no-store"
+    });
+
+    if (response.status === 401) {
+      clearStoredAccessToken();
+    }
+
+    if (!response.ok) {
+      const payloadError = (await response.json().catch(() => null)) as
+        | { error?: string }
+        | null;
+      throw new Error(payloadError?.error ?? `Request failed with status ${response.status}.`);
+    }
+
+    return (await response.json()) as PromptResponse;
+  },
   getPendingApprovals: () => fetchJson<ApprovalRecord[]>("/api/approvals"),
   decideApproval: (approvalId: string, payload: ApprovalDecision) =>
     fetchJson<ApprovalRecord>(`/api/approvals/${approvalId}/decision`, {
@@ -202,6 +302,48 @@ export const api = {
     fetchJson<{ events: Array<Record<string, unknown>> }>("/api/meetings/calendar-events"),
   getMeetingCalendarEventDetails: (eventId: string) =>
     fetchJson<Record<string, unknown>>(`/api/meetings/calendar-events/${eventId}`),
+  getDailyUpdateReport: (filters?: ReportFilters) =>
+    fetchJson<ReportTable>(`/api/reports/daily-updates${reportQueryString(filters)}`),
+  getPendingBlockersReport: (filters?: ReportFilters) =>
+    fetchJson<ReportTable>(`/api/reports/blockers${reportQueryString(filters)}`),
+  getResolvedBlockersReport: (filters?: ReportFilters) =>
+    fetchJson<ReportTable>(`/api/reports/resolved-blockers${reportQueryString(filters)}`),
+  getCompletedVsPendingReport: (filters?: ReportFilters) =>
+    fetchJson<ReportTable>(`/api/reports/completed-vs-pending${reportQueryString(filters)}`),
+  getWeeklyBusinessReport: (filters?: ReportFilters) =>
+    fetchJson<ReportTable>(`/api/reports/weekly-business-report${reportQueryString(filters)}`),
+  queryReports: (payload: ReportQueryRequest) =>
+    fetchJson<ReportTable>("/api/reports/query", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  ingestUpdateEmail: (payload: IngestUpdateEmailRequest) =>
+    fetchJson<{
+      update: Record<string, unknown>;
+      comparison: Record<string, unknown>;
+      blockers: Array<Record<string, unknown>>;
+    }>("/api/reports/email-updates/ingest", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  syncUpdateEmails: (payload: SyncUpdateEmailsRequest) =>
+    fetchJson<{
+      query: string;
+      syncedCount: number;
+      skippedCount: number;
+      processed: Array<Record<string, unknown>>;
+    }>("/api/reports/email-updates/sync", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  exportReportTable: (payload: ExportTableRequest) =>
+    fetchBlob("/api/reports/export", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      headers: {
+        "Content-Type": "application/json"
+      }
+    }),
   getHealth: () => fetchJson<HealthResponse>("/health"),
   subscribeToRun: (
     runId: string,

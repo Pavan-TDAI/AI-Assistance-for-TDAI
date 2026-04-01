@@ -38,6 +38,10 @@ export class WorkspaceMailConnector implements GmailConnectorLike {
     return (await this.resolve()).searchMessages(query, limit);
   }
 
+  async getMessage(messageId: string) {
+    return (await this.resolve()).getMessage(messageId);
+  }
+
   async createDraft(input: Record<string, unknown>) {
     return (await this.resolve()).createDraft(input);
   }

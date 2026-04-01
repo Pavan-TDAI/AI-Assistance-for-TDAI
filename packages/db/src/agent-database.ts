@@ -1,19 +1,25 @@
-import { MongoClient, type Db } from "mongodb";
+import { MongoClient, type Db, type Filter } from "mongodb";
 
 import {
+  BlockerTrackingSchema,
   MeetingSchema,
+  MessageSchema,
   RunRecordSchema,
   SettingsSchema,
+  DailyUpdateSchema,
+  WeeklyReportSchema,
   createDefaultSettings,
   createId,
   nowIso,
   titleFromPrompt,
   type ApprovalRecord,
   type AuthSessionRecord,
+  type BlockerTrackingRecord,
   type LocalAccount,
   type AuditLogRecord,
   type ChatSession,
   type ConversationRecord,
+  type DailyUpdateRecord,
   type HistorySnapshot,
   type LocalProfile,
   type MeetingRecord,
@@ -24,7 +30,9 @@ import {
   type SettingsRecord,
   type SettingsUpdate,
   type TaskRecord,
-  type ToolCallRecord
+  type ToolCallRecord,
+  type WeeklyReportRecord,
+  type WorkflowArtifactRecord
 } from "@personal-ai/shared";
 
 const collections = {
@@ -38,6 +46,10 @@ const collections = {
   approvals: "approvals",
   runs: "runs",
   meetings: "meetings",
+  dailyUpdates: "daily_updates",
+  blockerTracking: "blocker_tracking",
+  weeklyReports: "weekly_reports",
+  workflowArtifacts: "workflow_artifacts",
   tasks: "tasks",
   memories: "memory",
   settings: "settings",
@@ -108,6 +120,22 @@ export class AgentDatabase {
     return this.db.collection<MeetingRecord>(collections.meetings);
   }
 
+  private dailyUpdates() {
+    return this.db.collection<DailyUpdateRecord>(collections.dailyUpdates);
+  }
+
+  private blockerTracking() {
+    return this.db.collection<BlockerTrackingRecord>(collections.blockerTracking);
+  }
+
+  private weeklyReports() {
+    return this.db.collection<WeeklyReportRecord>(collections.weeklyReports);
+  }
+
+  private workflowArtifacts() {
+    return this.db.collection<WorkflowArtifactRecord>(collections.workflowArtifacts);
+  }
+
   private tasks() {
     return this.db.collection<TaskRecord>(collections.tasks);
   }
@@ -148,6 +176,21 @@ export class AgentDatabase {
       this.runs().createIndex({ sessionId: 1, createdAt: -1 }),
       this.meetings().createIndex({ id: 1 }, { unique: true }),
       this.meetings().createIndex({ generatedAt: -1 }),
+      this.dailyUpdates().createIndex({ id: 1 }, { unique: true }),
+      this.dailyUpdates().createIndex({ sourceEmailId: 1 }, { unique: true }),
+      this.dailyUpdates().createIndex({ employeeName: 1, emailDate: -1 }),
+      this.dailyUpdates().createIndex({ mailType: 1, emailDate: -1 }),
+      this.blockerTracking().createIndex({ id: 1 }, { unique: true }),
+      this.blockerTracking().createIndex({ employeeName: 1, status: 1, lastSeenDate: -1 }),
+      this.blockerTracking().createIndex({ normalizedBlockerKey: 1, employeeName: 1 }),
+      this.weeklyReports().createIndex({ id: 1 }, { unique: true }),
+      this.weeklyReports().createIndex(
+        { employeeName: 1, weekStartDate: 1, weekEndDate: 1 },
+        { unique: true }
+      ),
+      this.workflowArtifacts().createIndex({ id: 1 }, { unique: true }),
+      this.workflowArtifacts().createIndex({ profileId: 1, createdAt: -1 }),
+      this.workflowArtifacts().createIndex({ kind: 1, profileId: 1, createdAt: -1 }),
       this.tasks().createIndex({ id: 1 }, { unique: true }),
       this.tasks().createIndex({ sessionId: 1, createdAt: -1 }),
       this.memories().createIndex({ id: 1 }, { unique: true }),
@@ -267,6 +310,7 @@ export class AgentDatabase {
   async createAccount(args: {
     displayName: string;
     email: string;
+    role: LocalAccount["role"];
     passwordHash: string;
     passwordSalt: string;
   }) {
@@ -287,6 +331,7 @@ export class AgentDatabase {
       profileId: profile.id,
       displayName: args.displayName,
       email: args.email.toLowerCase(),
+      role: args.role,
       passwordHash: args.passwordHash,
       passwordSalt: args.passwordSalt
     };
@@ -301,6 +346,10 @@ export class AgentDatabase {
 
   async getAccountById(accountId: string) {
     return this.accounts().findOne({ id: accountId });
+  }
+
+  async getAccountByProfileId(profileId: string) {
+    return this.accounts().findOne({ profileId });
   }
 
   async touchAccountLogin(accountId: string) {
@@ -392,7 +441,7 @@ export class AgentDatabase {
               sessionId: session.id,
               title: session.title
             } satisfies ConversationRecord),
-          latestMessage: latestMessage ?? undefined
+          latestMessage: latestMessage ? MessageSchema.parse(latestMessage) : undefined
         };
       })
     );
@@ -466,7 +515,8 @@ export class AgentDatabase {
   }
 
   async listMessages(conversationId: string) {
-    return this.messages().find({ conversationId }).sort({ createdAt: 1 }).toArray();
+    const messages = await this.messages().find({ conversationId }).sort({ createdAt: 1 }).toArray();
+    return messages.map((message) => MessageSchema.parse(message));
   }
 
   async createMessage(
@@ -672,6 +722,152 @@ export class AgentDatabase {
 
   async listMeetings(limit = 30) {
     return this.meetings().find({}).sort({ createdAt: -1 }).limit(limit).toArray();
+  }
+
+  async createDailyUpdate(
+    input: Omit<DailyUpdateRecord, "id" | "createdAt" | "updatedAt">
+  ) {
+    const timestamp = nowIso();
+    const update = DailyUpdateSchema.parse({
+      id: createId("update"),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      ...input
+    });
+    await this.dailyUpdates().insertOne(update);
+    return update;
+  }
+
+  async updateDailyUpdate(updateId: string, patch: Partial<DailyUpdateRecord>) {
+    await this.dailyUpdates().updateOne(
+      { id: updateId },
+      { $set: { ...patch, updatedAt: nowIso() } }
+    );
+    return this.dailyUpdates().findOne({ id: updateId });
+  }
+
+  async getDailyUpdate(updateId: string) {
+    return this.dailyUpdates().findOne({ id: updateId });
+  }
+
+  async getDailyUpdateBySourceEmailId(sourceEmailId: string) {
+    return this.dailyUpdates().findOne({ sourceEmailId });
+  }
+
+  async listDailyUpdates(filter: Filter<DailyUpdateRecord> = {}, limit = 250) {
+    return this.dailyUpdates()
+      .find(filter)
+      .sort({ emailDate: -1, createdAt: -1 })
+      .limit(limit)
+      .toArray();
+  }
+
+  async createBlocker(input: Omit<BlockerTrackingRecord, "id" | "createdAt" | "updatedAt">) {
+    const timestamp = nowIso();
+    const blocker = BlockerTrackingSchema.parse({
+      id: createId("blocker"),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      ...input
+    });
+    await this.blockerTracking().insertOne(blocker);
+    return blocker;
+  }
+
+  async updateBlocker(blockerId: string, patch: Partial<BlockerTrackingRecord>) {
+    await this.blockerTracking().updateOne(
+      { id: blockerId },
+      { $set: { ...patch, updatedAt: nowIso() } }
+    );
+    return this.blockerTracking().findOne({ id: blockerId });
+  }
+
+  async getBlocker(blockerId: string) {
+    return this.blockerTracking().findOne({ id: blockerId });
+  }
+
+  async listBlockers(filter: Filter<BlockerTrackingRecord> = {}, limit = 250) {
+    return this.blockerTracking()
+      .find(filter)
+      .sort({ lastSeenDate: -1, createdAt: -1 })
+      .limit(limit)
+      .toArray();
+  }
+
+  async createWeeklyReport(
+    input: Omit<WeeklyReportRecord, "id" | "createdAt" | "updatedAt">
+  ) {
+    const timestamp = nowIso();
+    const report = WeeklyReportSchema.parse({
+      id: createId("wbr"),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      ...input
+    });
+    await this.weeklyReports().insertOne(report);
+    return report;
+  }
+
+  async updateWeeklyReport(reportId: string, patch: Partial<WeeklyReportRecord>) {
+    await this.weeklyReports().updateOne(
+      { id: reportId },
+      { $set: { ...patch, updatedAt: nowIso() } }
+    );
+    return this.weeklyReports().findOne({ id: reportId });
+  }
+
+  async getWeeklyReportByEmployeeWeek(
+    employeeName: string,
+    weekStartDate: string,
+    weekEndDate: string
+  ) {
+    return this.weeklyReports().findOne({
+      employeeName,
+      weekStartDate,
+      weekEndDate
+    });
+  }
+
+  async listWeeklyReports(filter: Filter<WeeklyReportRecord> = {}, limit = 100) {
+    return this.weeklyReports()
+      .find(filter)
+      .sort({ weekStartDate: -1, employeeName: 1 })
+      .limit(limit)
+      .toArray();
+  }
+
+  async createWorkflowArtifact(
+    input: Omit<WorkflowArtifactRecord, "id" | "createdAt" | "updatedAt">
+  ) {
+    const timestamp = nowIso();
+    const artifact: WorkflowArtifactRecord = {
+      id: createId("artifact"),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      ...input
+    };
+    await this.workflowArtifacts().insertOne(artifact);
+    return artifact;
+  }
+
+  async updateWorkflowArtifact(artifactId: string, patch: Partial<WorkflowArtifactRecord>) {
+    await this.workflowArtifacts().updateOne(
+      { id: artifactId },
+      { $set: { ...patch, updatedAt: nowIso() } }
+    );
+    return this.workflowArtifacts().findOne({ id: artifactId });
+  }
+
+  async getWorkflowArtifact(artifactId: string) {
+    return this.workflowArtifacts().findOne({ id: artifactId });
+  }
+
+  async listWorkflowArtifacts(filter: Filter<WorkflowArtifactRecord> = {}, limit = 20) {
+    return this.workflowArtifacts()
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .toArray();
   }
 
   async createTask(input: Omit<TaskRecord, "id" | "createdAt" | "updatedAt">) {

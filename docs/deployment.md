@@ -1,81 +1,142 @@
 # Deployment Guide
 
-## Hosting Shape
+## Recommended Deployment Shape
 
-This repo is a monorepo with two separate runtime pieces:
+This monorepo has two runtime targets:
 
 - `apps/web`: Next.js frontend
-- `apps/server`: Express API, SSE run stream, local-tool runtime, connector services
+- `apps/server`: Express API, SSE stream, connector services, local-tool runtime
 
-For review deployments, use this split:
+Use this split in production:
 
 1. Deploy `apps/web` to Vercel
-2. Deploy `apps/server` to a Node host such as Railway, Render, Fly.io, or a VM
+2. Deploy `apps/server` as a Dockerized Node service on Railway, Render, Fly.io, a VM, or another container host
 
-This is the practical setup because the backend is not just a simple API. It uses:
+The backend should not be deployed to Vercel. It relies on a long-running Express server, Server-Sent Events, local-tool execution, and connector workflows that are a poor fit for Vercel serverless functions.
 
-- Express server lifecycle
-- Server-Sent Events
-- browser automation hooks
-- local-tool execution
+## What Is Included In This Repo
 
-Those backend behaviors are a poor fit for a single Vercel frontend deployment.
+Deployment artifacts added to the repo:
 
-## GitHub CI
+- [compose.yml](../compose.yml)
+- [.env.docker.example](../.env.docker.example)
+- [apps/server/Dockerfile](../apps/server/Dockerfile)
+- [apps/web/Dockerfile](../apps/web/Dockerfile)
+- [.github/workflows/ci.yml](../.github/workflows/ci.yml)
+- [.github/workflows/vercel-web.yml](../.github/workflows/vercel-web.yml)
 
-The repo includes:
+## Local Docker Run
 
-- `.github/workflows/ci.yml`
+### 1. Create the Docker env file
 
-This workflow runs on pushes to `main` and on pull requests. It does:
+From the repo root:
+
+```powershell
+Copy-Item .env.docker.example .env.docker
+```
+
+Update `.env.docker` with any real provider or connector secrets you want the containers to use.
+
+### 2. Start the stack
+
+```powershell
+docker compose --env-file .env.docker up --build
+```
+
+Services exposed locally:
+
+- web: `http://localhost:3000`
+- api: `http://localhost:4000`
+- health: `http://localhost:4000/health`
+- mongo: `mongodb://localhost:27017`
+
+### 3. Stop the stack
+
+```powershell
+docker compose --env-file .env.docker down
+```
+
+If you also want to remove the MongoDB volume:
+
+```powershell
+docker compose --env-file .env.docker down -v
+```
+
+## Docker Notes
+
+- The compose stack uses `mongo:7.0` plus separate web and server images built from this repo.
+- The backend container overrides `HOST=0.0.0.0` and defaults Mongo to `mongodb://mongo:27017`.
+- `OLLAMA_BASE_URL` defaults to `http://host.docker.internal:11434` so a host-machine Ollama instance can still be reached from the container.
+- Uploads are persisted in a named Docker volume mounted at `/workspace/apps/server/.tdai-uploads`.
+
+Important runtime caveat:
+
+- Filesystem, shell, and browser tools execute inside the container, not on your Windows host.
+- That means local-tool behavior in Docker is useful for deployment validation, but it is not identical to the native local-first experience on your machine.
+
+## GitHub Actions
+
+### CI workflow
+
+File:
+
+- [ci.yml](../.github/workflows/ci.yml)
+
+This workflow runs on pull requests, pushes to `main`, and manual dispatch. It does:
 
 1. `pnpm install --frozen-lockfile`
 2. `pnpm typecheck`
 3. `pnpm test`
-4. `pnpm --filter @personal-ai/server build`
-5. `pnpm --filter @personal-ai/web build`
+4. `pnpm build`
+5. `docker compose --env-file .env.docker.example config`
+6. Docker image validation for both `apps/server/Dockerfile` and `apps/web/Dockerfile`
 
-## Vercel Setup
+### Vercel deployment workflow
 
-Create a new Vercel project from this GitHub repository.
+File:
 
-Use these settings:
+- [vercel-web.yml](../.github/workflows/vercel-web.yml)
 
-- Framework: `Next.js`
+This workflow deploys only the frontend:
+
+- preview deployment on pull requests
+- production deployment on pushes to `main`
+- manual production deployment with `workflow_dispatch` when run from `main`
+
+Required GitHub repository secrets:
+
+- `VERCEL_TOKEN`
+- `VERCEL_ORG_ID`
+- `VERCEL_PROJECT_ID`
+
+## Vercel Project Setup
+
+Create a Vercel project for the frontend only.
+
+Recommended Vercel settings:
+
+- Framework Preset: `Next.js`
 - Root Directory: `apps/web`
-- Install Command: `pnpm install --frozen-lockfile`
-- Build Command: `pnpm --filter @personal-ai/web build`
 
-Environment variables for the Vercel project:
-
-- `NEXT_PUBLIC_API_BASE_URL`
-
-Set that value to your deployed backend URL, for example:
+Frontend runtime env required in Vercel:
 
 ```env
-NEXT_PUBLIC_API_BASE_URL=https://your-api.example.com
+NEXT_PUBLIC_API_BASE_URL=https://your-backend.example.com
 ```
 
-Official Vercel monorepo reference:
+If you use the GitHub Actions workflow for deployment, avoid enabling a second overlapping Git-based deployment path in Vercel for the same branch flow, otherwise you can end up with duplicate builds.
 
-- https://vercel.com/docs/monorepos
+## Backend Deployment Setup
 
-## Backend Setup
+Deploy the API as a Docker service using [apps/server/Dockerfile](../apps/server/Dockerfile).
 
-Deploy the backend from the same repository on a Node host.
-
-Recommended commands:
-
-- Install: `pnpm install --frozen-lockfile`
-- Build: `pnpm --filter @personal-ai/server build`
-- Start: `pnpm --filter @personal-ai/server start`
-
-Required backend environment variables:
+Minimum backend environment variables:
 
 ```env
+NODE_ENV=production
 HOST=0.0.0.0
 PORT=4000
-APP_ORIGIN=https://your-vercel-frontend.vercel.app
+APP_ORIGIN=https://your-frontend.vercel.app
 
 MONGODB_URI=...
 MONGODB_DB_NAME=personal_ai_agent
@@ -84,7 +145,11 @@ DEFAULT_PROVIDER=mock
 DEFAULT_OPENAI_MODEL=gpt-4o-mini
 DEFAULT_GEMINI_MODEL=gemini-2.5-flash
 DEFAULT_OLLAMA_MODEL=llama3.1:8b
+```
 
+Optional provider and connector variables:
+
+```env
 OPENAI_API_KEY=
 GEMINI_API_KEY=
 OLLAMA_BASE_URL=
@@ -101,37 +166,28 @@ MICROSOFT_REDIRECT_URI=
 MICROSOFT_REFRESH_TOKEN=
 
 SAFE_ROOTS=
-SAFE_SHELL_COMMANDS=Get-ChildItem,dir,pwd
+SAFE_SHELL_COMMANDS=
 BLOCKED_SHELL_PATTERNS=
 HEADLESS_BROWSER=false
 ```
 
-## Review Deployment Notes
+## Suggested Push Flow
 
-When you connect the repo to Vercel:
+After you review the files locally:
 
-- every branch can get a Preview deployment
-- `main` can be your production branch
-- preview frontend URLs should point to a preview or shared backend URL
+1. Run the Docker stack with `docker compose --env-file .env.docker up --build`
+2. Verify `http://localhost:3000` and `http://localhost:4000/health`
+3. Push the repo to GitHub
+4. Add the Vercel secrets in GitHub
+5. Create the Vercel project with `apps/web` as the root directory
+6. Point `NEXT_PUBLIC_API_BASE_URL` to the deployed backend URL
 
-If the backend is not deployed yet, the frontend can still be reviewed visually, but chat and meeting actions will not work.
+## Secret Hygiene
 
-## Git Push Flow
-
-Once the repo is initialized locally, use:
-
-```powershell
-git init
-git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin https://github.com/Pavan-TDAI/AI-Assistance-for-TDAI.git
-git push -u origin main
-```
-
-Before pushing, make sure secrets are not tracked:
+Do not commit:
 
 - `.env`
 - `.env.local`
+- `.env.docker`
 - `.local-vault`
 - `client_secret*.json`

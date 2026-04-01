@@ -1,0 +1,25 @@
+.git
+.github
+node_modules
+.pnpm-store
+.next
+.next-dev
+dist
+coverage
+.turbo
+.vercel
+playwright-report
+test-results
+.env
+.env.*
+!.env.docker.example
+apps/server/.tdai-uploads
+apps/server/Downloads
+apps/web/.next
+apps/web/.next-dev
+apps/web/out
+.local-vault
+*.log
+*.credentials.json
+client_secret*.json
+AI Work Intelligence Assistant for TDAI.pdf

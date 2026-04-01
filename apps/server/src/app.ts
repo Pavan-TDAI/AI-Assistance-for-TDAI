@@ -16,16 +16,20 @@ import { registerConnectorRoutes } from "./routes/connectors.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerHistoryRoutes } from "./routes/history.js";
 import { registerMeetingRoutes } from "./routes/meetings.js";
+import { registerReportRoutes } from "./routes/reports.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
-import { authMiddleware } from "./auth-context.js";
+import { authMiddleware, authorizeRoles } from "./auth-context.js";
 import { AgentRuntimeService } from "./services/agent-runtime-service.js";
 import { ApprovalService } from "./services/approval-service.js";
 import { AuthService } from "./services/auth-service.js";
 import { AuditLogService } from "./services/audit-log-service.js";
+import { ChatAttachmentService } from "./services/chat-attachment-service.js";
 import { ConnectorService } from "./services/connector-service.js";
 import { ConnectorVaultService } from "./services/connector-vault-service.js";
 import { MeetingService } from "./services/meeting-service.js";
+import { ReportingService } from "./services/reporting-service.js";
+import { WorkflowArtifactService } from "./services/workflow-artifact-service.js";
 import {
   Microsoft365OAuthManager,
   MicrosoftCalendarConnector,
@@ -40,6 +44,8 @@ import {
   WorkspaceMailConnector
 } from "./services/workspace-connectors.js";
 import { createMeetingTools } from "./tools/meeting-tools.js";
+import { createReportingTools } from "./tools/reporting-tools.js";
+import { createWorkflowTools } from "./tools/workflow-tools.js";
 
 export interface CreatedServer {
   app: Express;
@@ -121,6 +127,7 @@ export const createServer = async (): Promise<CreatedServer> => {
   const audit = new AuditLogService(db, logger);
   const authService = new AuthService(db);
   const streamService = new RunStreamService();
+  const chatAttachmentService = new ChatAttachmentService(process.cwd(), audit);
   const approvalService = new ApprovalService(db, audit);
   const settingsService = new SettingsService(db, audit, {
     openAiConfigured: Boolean(env.OPENAI_API_KEY),
@@ -139,6 +146,22 @@ export const createServer = async (): Promise<CreatedServer> => {
     workspaceCalendar
   );
   registry.register(...createMeetingTools(meetingService));
+  const reportingService = new ReportingService(
+    db,
+    audit,
+    settingsService,
+    providerFactory,
+    workspaceMail
+  );
+  registry.register(...createReportingTools(reportingService));
+  const workflowArtifactService = new WorkflowArtifactService(
+    db,
+    audit,
+    settingsService,
+    providerFactory,
+    workspaceMail
+  );
+  registry.register(...createWorkflowTools(workflowArtifactService));
   const engine = new AgentExecutionEngine({
     db,
     registry,
@@ -170,12 +193,14 @@ export const createServer = async (): Promise<CreatedServer> => {
   registerAuthRoutes(app, authService, requireAuth);
   app.use("/api", requireAuth);
 
-  registerChatRoutes(app, runtime, streamService, db);
+  registerChatRoutes(app, runtime, streamService, db, chatAttachmentService);
   registerSessionRoutes(app, sessionService);
   registerApprovalRoutes(app, db, approvalService);
   registerSettingsRoutes(app, settingsService, registry);
   registerConnectorRoutes(app, connectorService, audit);
   registerMeetingRoutes(app, meetingService);
+  app.use("/api/reports", authorizeRoles("manager", "admin"));
+  registerReportRoutes(app, reportingService);
   registerHistoryRoutes(app, db);
 
   app.use(

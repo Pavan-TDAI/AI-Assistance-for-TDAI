@@ -9,10 +9,12 @@ import {
   ChevronLeft,
   LayoutPanelLeft,
   LoaderCircle,
+  Paperclip,
   PanelRight,
   Send,
   ShieldAlert,
   Sparkles,
+  X,
   XCircle
 } from "lucide-react";
 
@@ -20,6 +22,7 @@ import type {
   ApprovalRecord,
   HealthResponse,
   MessageRecord,
+  ReportTable,
   RunEvent,
   RunRecord,
   SessionBundle,
@@ -92,9 +95,73 @@ const readStoredString = (key: string) => {
   return window.localStorage.getItem(key) ?? undefined;
 };
 
+const parseReportToolTable = (message: MessageRecord) => {
+  if (message.role !== "tool" || message.toolName !== "reports.query_table") {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(message.content) as ReportTable;
+    if (
+      typeof parsed?.title === "string" &&
+      Array.isArray(parsed?.columns) &&
+      Array.isArray(parsed?.rows)
+    ) {
+      return parsed;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+};
+
+const stringifyCellValue = (value: unknown): string => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => stringifyCellValue(entry)).join(" | ");
+  }
+
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+
+  return String(value);
+};
+
+const flattenListItems = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => flattenListItems(entry)).filter(Boolean);
+  }
+
+  const text = stringifyCellValue(value).trim();
+  if (!text) {
+    return [];
+  }
+
+  return text
+    .split(/\r?\n+/)
+    .map((entry) => entry.replace(/^[\-\*\d\.\)\s]+/, "").trim())
+    .filter(Boolean);
+};
+
+const formatBytes = (value: number) => {
+  if (value >= 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (value >= 1024) {
+    return `${Math.round(value / 102.4) / 10} KB`;
+  }
+  return `${value} B`;
+};
+
 export const ChatWorkspace = () => {
   const streamRef = useRef<EventSource | null>(null);
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
+  const composerFileInputRef = useRef<HTMLInputElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const isComposingRef = useRef(false);
 
@@ -110,6 +177,7 @@ export const ChatWorkspace = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isUtilityDrawerOpen, setIsUtilityDrawerOpen] = useState(true);
   const [selectedMeetingContextId, setSelectedMeetingContextId] = useState<string>();
+  const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
 
   const pendingApprovals = useMemo(
     () => bundle?.approvals.filter((approval) => approval.status === "pending") ?? [],
@@ -269,7 +337,10 @@ export const ChatWorkspace = () => {
               approvals: event.approval
                 ? upsertApproval(current.approvals, event.approval)
                 : current.approvals,
-              toolCalls: upsertToolCall(current.toolCalls, event.toolCall)
+              toolCalls: upsertToolCall(current.toolCalls, event.toolCall),
+              messages: event.message
+                ? upsertMessage(current.messages, event.message)
+                : current.messages
             };
           }
 
@@ -306,7 +377,7 @@ export const ChatWorkspace = () => {
   };
 
   const handleSend = async () => {
-    if (!input.trim() || sending) {
+    if ((!input.trim() && !pendingAttachments.length) || sending) {
       return;
     }
 
@@ -314,13 +385,25 @@ export const ChatWorkspace = () => {
     setError(null);
 
     try {
-      const response = await api.sendPrompt({
-        sessionId: selectedSessionId,
-        content: input.trim(),
-        selectedMeetingId: selectedMeetingContextId
-      });
+      const response = pendingAttachments.length
+        ? await api.sendPromptWithAttachments({
+            sessionId: selectedSessionId,
+            content: input.trim(),
+            selectedMeetingId: selectedMeetingContextId,
+            attachments: pendingAttachments
+          })
+        : await api.sendPrompt({
+            sessionId: selectedSessionId,
+            content: input.trim(),
+            selectedMeetingId: selectedMeetingContextId,
+            attachments: []
+          });
 
       setInput("");
+      setPendingAttachments([]);
+      if (composerFileInputRef.current) {
+        composerFileInputRef.current.value = "";
+      }
       setSelectedSessionId(response.sessionId);
       setActiveRunId(response.runId);
       await Promise.all([loadSessions(), loadBundle(response.sessionId)]);
@@ -378,7 +461,9 @@ export const ChatWorkspace = () => {
   };
 
   const messages = bundle?.messages ?? [];
-  const visibleMessages = messages.filter((message) => message.role !== "tool");
+  const visibleMessages = messages.filter(
+    (message) => message.role !== "tool" || message.toolName === "reports.query_table"
+  );
   const focusMode = !isSidebarOpen && !isUtilityDrawerOpen;
 
   return (
@@ -535,6 +620,34 @@ export const ChatWorkspace = () => {
         <div className="shrink-0 border-t border-ink/10 px-4 py-4 sm:px-6">
           <div className={`mx-auto ${focusMode ? "max-w-5xl" : "max-w-4xl"}`}>
             <div className="surface-muted rounded-[2rem] p-3">
+              <input
+                ref={composerFileInputRef}
+                type="file"
+                accept=".txt,.md,.pdf,.docx,.csv,.json"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? []);
+                  if (!files.length) {
+                    return;
+                  }
+
+                  setPendingAttachments((current) => {
+                    const existingKeys = new Set(
+                      current.map((file) => `${file.name}:${file.size}:${file.lastModified}`)
+                    );
+                    const deduped = files.filter((file) => {
+                      const key = `${file.name}:${file.size}:${file.lastModified}`;
+                      if (existingKeys.has(key)) {
+                        return false;
+                      }
+                      existingKeys.add(key);
+                      return true;
+                    });
+                    return [...current, ...deduped];
+                  });
+                }}
+              />
               <textarea
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
@@ -553,6 +666,34 @@ export const ChatWorkspace = () => {
                 placeholder="Ask the agent to plan work, inspect files, browse, summarize meetings, or coordinate tasks..."
                 className="min-h-28 w-full resize-none bg-transparent p-3 text-base text-ink outline-none placeholder:text-ink/40"
               />
+              {pendingAttachments.length ? (
+                <div className="flex flex-wrap gap-2 px-3 pb-3">
+                  {pendingAttachments.map((file) => {
+                    const fileKey = `${file.name}:${file.size}:${file.lastModified}`;
+                    return (
+                      <div key={fileKey} className="attachment-chip">
+                        <span className="font-medium text-ink">{file.name}</span>
+                        <span className="text-ink/45">{formatBytes(file.size)}</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPendingAttachments((current) =>
+                              current.filter(
+                                (entry) =>
+                                  `${entry.name}:${entry.size}:${entry.lastModified}` !== fileKey
+                              )
+                            )
+                          }
+                          className="rounded-full p-1 text-ink/45 transition hover:bg-ink/5 hover:text-ink"
+                          aria-label={`Remove ${file.name}`}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
               <div className="flex flex-wrap items-center justify-between gap-3 px-3 pb-2">
                 <div className="flex flex-wrap items-center gap-2 text-xs text-ink/45">
                   <span>
@@ -571,19 +712,29 @@ export const ChatWorkspace = () => {
                     </span>
                   ) : null}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void handleSend()}
-                  disabled={sending}
-                  className="button-primary rounded-[1.15rem] px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {sending ? (
-                    <LoaderCircle className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Send className="h-4 w-4" />
-                  )}
-                  Send
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => composerFileInputRef.current?.click()}
+                    className="button-secondary !px-4 !py-2 text-sm"
+                  >
+                    <Paperclip className="h-4 w-4" />
+                    Attach files
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSend()}
+                    disabled={sending || (!input.trim() && !pendingAttachments.length)}
+                    className="button-primary rounded-[1.15rem] px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {sending ? (
+                      <LoaderCircle className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Send className="h-4 w-4" />
+                    )}
+                    Send
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -622,23 +773,23 @@ export const ChatWorkspace = () => {
                     <p className="wrap-anywhere font-medium text-ink">{approval.toolName}</p>
                     <p className="mt-1 text-sm text-ink/70">{approval.inputSummary}</p>
                     <p className="mt-2 text-xs text-ink/52">{approval.reason}</p>
-                    <div className="mt-4 flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void handleApproval(approval.id, "approved")}
-                        className="surface-elevated inline-flex items-center gap-2 rounded-2xl bg-signal px-3 py-2 text-sm text-white"
-                      >
-                        <CheckCircle2 className="h-4 w-4" />
-                        Approve
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleApproval(approval.id, "denied")}
-                        className="surface-muted inline-flex items-center gap-2 rounded-2xl border-red-200 px-3 py-2 text-sm text-red-600"
-                      >
-                        <XCircle className="h-4 w-4" />
-                        Deny
-                      </button>
+                      <div className="mt-4 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void handleApproval(approval.id, "approved")}
+                          className="button-success !rounded-2xl !px-3 !py-2 text-sm"
+                        >
+                          <CheckCircle2 className="h-4 w-4" />
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleApproval(approval.id, "denied")}
+                          className="button-danger !rounded-2xl !px-3 !py-2 text-sm"
+                        >
+                          <XCircle className="h-4 w-4" />
+                          Deny
+                        </button>
                     </div>
                   </div>
                 ))
@@ -771,6 +922,8 @@ const MessageBubble = ({ message }: { message: MessageRecord }) => {
   const isPlan =
     message.role === "assistant" &&
     /^planned approach:|^\d+\./i.test(message.content.trim());
+  const reportTable = parseReportToolTable(message);
+  const attachments = message.attachments ?? [];
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -786,15 +939,128 @@ const MessageBubble = ({ message }: { message: MessageRecord }) => {
         }`}
       >
         <p className="mb-2 text-xs uppercase tracking-[0.2em] text-current/50">
-          {isPlan ? "plan" : message.role}
+          {reportTable ? "report table" : isPlan ? "plan" : message.role}
         </p>
-        <p className="wrap-anywhere whitespace-pre-wrap text-sm leading-7">
-          {message.content}
-        </p>
+        {reportTable ? (
+          <ChatReportTable table={reportTable} />
+        ) : (
+          <div className="space-y-3">
+            {message.content.trim() ? (
+              <p className="wrap-anywhere whitespace-pre-wrap text-sm leading-7">
+                {message.content}
+              </p>
+            ) : null}
+            {attachments.length ? (
+              <MessageAttachments attachments={attachments} isUser={isUser} />
+            ) : null}
+          </div>
+        )}
       </div>
     </div>
   );
 };
+
+const MessageAttachments = ({
+  attachments,
+  isUser
+}: {
+  attachments: MessageRecord["attachments"];
+  isUser: boolean;
+}) => (
+  <div className="space-y-2">
+    <p className={`text-xs uppercase tracking-[0.18em] ${isUser ? "text-white/55" : "text-ink/45"}`}>
+      Attachments
+    </p>
+    <div className="space-y-2">
+      {attachments.map((attachment) => (
+        <div
+          key={attachment.id}
+          className={`attachment-card ${isUser ? "attachment-card-user" : ""}`}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-medium">{attachment.fileName}</span>
+            <span className={isUser ? "text-white/60" : "text-ink/45"}>
+              {formatBytes(attachment.sizeBytes)}
+            </span>
+          </div>
+          <p className={`mt-1 text-xs ${isUser ? "text-white/60" : "text-ink/48"}`}>
+            {attachment.storagePath}
+          </p>
+          {attachment.extractedTextPreview ? (
+            <p className={`mt-2 whitespace-pre-wrap text-sm ${isUser ? "text-white/82" : "text-ink/68"}`}>
+              {attachment.extractedTextPreview}
+            </p>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+const ChatReportTable = ({ table }: { table: ReportTable }) => (
+  <div className="space-y-4">
+    <div>
+      <p className="font-display text-xl font-semibold text-ink">{table.title}</p>
+      {table.subtitle ? <p className="mt-1 text-sm text-ink/58">{table.subtitle}</p> : null}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {Object.entries(table.appliedFilters).map(([label, value]) => (
+          <span key={label} className="soft-chip rounded-full px-3 py-1 text-xs text-ink/62">
+            {label}: {value}
+          </span>
+        ))}
+      </div>
+    </div>
+
+    {table.rows.length ? (
+      <div className="overflow-x-auto">
+        <table className="report-table min-w-full">
+          <thead>
+            <tr>
+              {table.columns.map((column) => (
+                <th key={column.key}>{column.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {table.rows.map((row, rowIndex) => (
+              <tr key={`${table.generatedAt}-${rowIndex}`}>
+                {table.columns.map((column) => {
+                  const value = row[column.key];
+                  const items = flattenListItems(value);
+                  return (
+                    <td key={column.key}>
+                      {Array.isArray(value) ? (
+                        items.length ? (
+                          <ol className="table-list">
+                            {items.map((entry, index) => (
+                              <li key={`${column.key}-${index}`} className="table-list-item">
+                                {entry}
+                              </li>
+                            ))}
+                          </ol>
+                        ) : (
+                          <span className="text-ink/35">-</span>
+                        )
+                      ) : (
+                        <div className="wrap-anywhere text-sm text-ink/72">
+                          {stringifyCellValue(value) || "-"}
+                        </div>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    ) : (
+      <div className="surface-muted rounded-[1.5rem] border-dashed p-4 text-sm text-ink/55">
+        {table.emptyMessage ?? "No rows were returned for this report."}
+      </div>
+    )}
+  </div>
+);
 
 const ToolCallBadge = ({ status }: { status: ToolCallRecord["status"] }) => {
   const styles: Record<ToolCallRecord["status"], string> = {

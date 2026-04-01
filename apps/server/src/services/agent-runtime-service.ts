@@ -15,6 +15,7 @@ import type { SettingsService } from "./settings-service.js";
 
 interface MailConnectorLike {
   searchMessages(query: string, limit?: number): Promise<Record<string, unknown>>;
+  getMessage(messageId: string): Promise<Record<string, unknown>>;
   createDraft(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   sendMessage(input: Record<string, unknown>): Promise<Record<string, unknown>>;
 }
@@ -46,14 +47,32 @@ export class AgentRuntimeService {
     private readonly workingDirectory: string
   ) {}
 
+  private buildEffectivePrompt(request: PromptRequest) {
+    const trimmed = request.content.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+
+    if (!request.attachments.length) {
+      return "Help me with this request.";
+    }
+
+    const attachmentList = request.attachments
+      .map((attachment) => attachment.fileName)
+      .join(", ");
+
+    return `Review the uploaded attachment${request.attachments.length === 1 ? "" : "s"} (${attachmentList}) and help me with the request.`;
+  }
+
   async sendPrompt(payload: PromptRequest): Promise<PromptResponse> {
     const request = PromptRequestSchema.parse(payload);
     const settings = await this.settingsService.getSettings();
     const profileId = request.profileId ?? "profile_local";
+    const effectivePrompt = this.buildEffectivePrompt(request);
     const { session, conversation } = await this.sessionService.resolveSession({
       sessionId: request.sessionId,
       profileId,
-      initialPrompt: request.content
+      initialPrompt: effectivePrompt
     });
 
     const runId = createId("run");
@@ -63,7 +82,8 @@ export class AgentRuntimeService {
       conversationId: conversation.id,
       runId,
       role: "user",
-      content: request.content
+      content: request.content,
+      attachments: request.attachments
     });
 
     await this.audit.log({
@@ -100,7 +120,7 @@ export class AgentRuntimeService {
         sessionId: session.id,
         conversationId: conversation.id,
         profileId,
-        userPrompt: request.content,
+        userPrompt: effectivePrompt,
         selectedMeetingId: request.selectedMeetingId,
         settings,
         services: {

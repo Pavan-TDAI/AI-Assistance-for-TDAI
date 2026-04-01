@@ -16,7 +16,8 @@ import {
   clearStoredAccessToken,
   getStoredAccessToken,
   setStoredAccessToken,
-  subscribeToAuthStorage
+  subscribeToAuthStorage,
+  touchStoredAccessTokenSession
 } from "../lib/auth-storage";
 
 interface AuthContextValue {
@@ -60,6 +61,55 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setIsLoading(true);
       void refresh();
     });
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const handleActivity = () => {
+      touchStoredAccessTokenSession();
+    };
+
+    const validateSession = () => {
+      const token = getStoredAccessToken();
+      if (!token) {
+        setUser(null);
+        setIsLoading(false);
+        return;
+      }
+
+      void refresh();
+    };
+
+    const interval = window.setInterval(validateSession, 60_000);
+    const activityEvents: Array<keyof WindowEventMap> = [
+      "click",
+      "keydown",
+      "mousemove",
+      "touchstart"
+    ];
+
+    for (const eventName of activityEvents) {
+      window.addEventListener(eventName, handleActivity, { passive: true });
+    }
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        validateSession();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      window.clearInterval(interval);
+      for (const eventName of activityEvents) {
+        window.removeEventListener(eventName, handleActivity);
+      }
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, []);
 
   const value = useMemo<AuthContextValue>(

@@ -108,7 +108,7 @@ export const HistoryDashboard = () => {
                         onClick={() => {
                           void api.restoreSession(entry.session.id).then(load);
                         }}
-                        className="surface-elevated inline-flex items-center gap-2 rounded-2xl bg-signal px-3 py-2 text-sm text-white"
+                        className="button-success !rounded-2xl !px-3 !py-2 text-sm"
                       >
                         <ArchiveRestore className="h-4 w-4" />
                         Restore
@@ -124,7 +124,7 @@ export const HistoryDashboard = () => {
                           }
                           void api.deleteSession(entry.session.id).then(load);
                         }}
-                        className="surface-muted inline-flex items-center gap-2 rounded-2xl border-red-200 px-3 py-2 text-sm text-red-600"
+                        className="button-danger !rounded-2xl !px-3 !py-2 text-sm"
                       >
                         <Trash2 className="h-4 w-4" />
                         Delete

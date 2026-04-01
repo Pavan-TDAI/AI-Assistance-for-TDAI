@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowRight, Bot, LoaderCircle, LockKeyhole, Sparkles } from "lucide-react";
 
+import { userRoleValues, type UserRole } from "@personal-ai/shared/src/contracts.js";
+
 import { useAuth } from "./auth-provider";
 
 export function AuthEntry({
@@ -19,6 +21,7 @@ export function AuthEntry({
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [role, setRole] = useState<UserRole>("employee");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasCompletedSubmit, setHasCompletedSubmit] = useState(false);
@@ -60,13 +63,15 @@ export function AuthEntry({
       if (isLogin) {
         await login({
           email,
-          password
+          password,
+          role
         });
       } else {
         await register({
           displayName,
           email,
-          password
+          password,
+          role
         });
       }
 
@@ -190,11 +195,22 @@ export function AuthEntry({
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
               />
+              <select
+                className="field"
+                value={role}
+                onChange={(event) => setRole(event.target.value as UserRole)}
+              >
+                {userRoleValues.map((entry) => (
+                  <option key={entry} value={entry}>
+                    {entry}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div className="surface-muted mt-6 rounded-[1.7rem] border-dashed p-4 text-sm leading-7 text-ink/62">
               {isLogin
-                ? "After login, we will suggest the account setup flow so client IDs, refresh tokens, and runtime options can be configured."
+                ? "After login, we will open the role-specific workspace. Sessions now expire automatically after inactivity and do not persist across browser restarts."
                 : "After signup, we send the user to setup first so the account can be connected to provider and OAuth configuration."}
             </div>
 

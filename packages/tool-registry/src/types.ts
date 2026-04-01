@@ -35,6 +35,7 @@ export interface BrowserManagerLike {
 
 export interface GmailConnectorLike {
   searchMessages(query: string, limit?: number): Promise<Record<string, unknown>>;
+  getMessage(messageId: string): Promise<Record<string, unknown>>;
   createDraft(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   sendMessage(input: Record<string, unknown>): Promise<Record<string, unknown>>;
 }

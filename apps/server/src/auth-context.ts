@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 
-import type { AuthUser } from "@personal-ai/shared";
+import type { AuthUser, UserRole } from "@personal-ai/shared";
 
 import type { AuthService } from "./services/auth-service.js";
 
@@ -70,3 +70,17 @@ export const getAuthContext = (request: Request): RequestAuthContext => {
 
   return auth;
 };
+
+export const authorizeRoles =
+  (...roles: UserRole[]) =>
+  (request: Request, response: Response, next: NextFunction) => {
+    const { user } = getAuthContext(request);
+    if (!roles.includes(user.role)) {
+      response.status(403).json({
+        error: "You do not have permission to access this area."
+      });
+      return;
+    }
+
+    next();
+  };

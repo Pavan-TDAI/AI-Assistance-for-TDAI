@@ -10,6 +10,7 @@ test-results
 .env
 .env.local
 .env.*.local
+.env.docker
 apps/web/.next
 apps/web/.next-dev
 apps/web/out

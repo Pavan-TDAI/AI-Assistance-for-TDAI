@@ -23,6 +23,21 @@ const graphScopes = [
   "offline_access"
 ].join(" ");
 
+const stripHtml = (value: string) =>
+  value
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<\/(p|div|li|br|h\d)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
 export interface CalendarConnectorWithDetails {
   listEvents(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   createEvent(input: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -162,10 +177,60 @@ export class MicrosoftMailConnector implements GmailConnectorLike {
               id: item.id,
               threadId: item.conversationId,
               snippet: item.bodyPreview,
-              subject: item.subject
+              subject: item.subject,
+              from:
+                typeof (item.from as { emailAddress?: { address?: unknown } } | undefined)
+                  ?.emailAddress?.address === "string"
+                  ? (item.from as { emailAddress?: { address?: string } }).emailAddress
+                      ?.address
+                  : undefined,
+              receivedAt:
+                typeof item.receivedDateTime === "string" ? item.receivedDateTime : undefined
             };
           })
         : []
+    };
+  }
+
+  async getMessage(messageId: string) {
+    const accessToken = await this.oauth.getAccessTokenOrThrow();
+    const payload = await fetchGraphJson(
+      accessToken,
+      `/me/messages/${encodeURIComponent(messageId)}`
+    );
+
+    const bodyContent =
+      typeof (payload?.body as { content?: unknown } | undefined)?.content === "string"
+        ? (payload?.body as { content?: string }).content ?? ""
+        : "";
+
+    return {
+      id: payload?.id,
+      threadId: payload?.conversationId,
+      subject: payload?.subject,
+      from:
+        typeof (payload?.from as { emailAddress?: { address?: unknown } } | undefined)
+          ?.emailAddress?.address === "string"
+          ? (payload?.from as { emailAddress?: { address?: string } }).emailAddress?.address
+          : undefined,
+      to: Array.isArray(payload?.toRecipients)
+        ? payload.toRecipients
+            .map((recipient) =>
+              String(
+                (
+                  recipient as {
+                    emailAddress?: { address?: string };
+                  }
+                ).emailAddress?.address ?? ""
+              )
+            )
+            .filter(Boolean)
+            .join(", ")
+        : undefined,
+      receivedAt:
+        typeof payload?.receivedDateTime === "string" ? payload.receivedDateTime : undefined,
+      snippet: payload?.bodyPreview,
+      bodyText: stripHtml(bodyContent || String(payload?.bodyPreview ?? ""))
     };
   }
 

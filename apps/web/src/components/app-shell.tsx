@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  BarChart3,
   Bot,
   CalendarRange,
   Clock3,
@@ -15,6 +16,14 @@ import {
 } from "lucide-react";
 
 import { useAuth } from "./auth-provider";
+
+const canAccessRoute = (role: "employee" | "manager" | "admin", pathname: string) => {
+  if (pathname.startsWith("/reports") || pathname.startsWith("/history")) {
+    return role === "manager" || role === "admin";
+  }
+
+  return true;
+};
 
 export const AppShell = ({ children }: { children: ReactNode }) => {
   const pathname = usePathname();
@@ -37,6 +46,16 @@ export const AppShell = ({ children }: { children: ReactNode }) => {
     }
 
     router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+  }, [isLoading, isMarketingRoute, pathname, router, user]);
+
+  useEffect(() => {
+    if (!user || isMarketingRoute || isLoading) {
+      return;
+    }
+
+    if (!canAccessRoute(user.role, pathname)) {
+      router.replace("/chat");
+    }
   }, [isLoading, isMarketingRoute, pathname, router, user]);
 
   if (isMarketingRoute) {
@@ -85,6 +104,14 @@ export const AppShell = ({ children }: { children: ReactNode }) => {
               pathname={pathname}
               icon={<Clock3 className="h-5 w-5" />}
               label="History"
+              hidden={user.role === "employee"}
+            />
+            <NavLink
+              href="/reports"
+              pathname={pathname}
+              icon={<BarChart3 className="h-5 w-5" />}
+              label="Reports"
+              hidden={user.role === "employee"}
             />
             <NavLink
               href="/settings"
@@ -107,6 +134,9 @@ export const AppShell = ({ children }: { children: ReactNode }) => {
               title={user.displayName}
             >
               {compactName}
+            </p>
+            <p className="mt-2 text-[10px] uppercase tracking-[0.16em] text-signal">
+              {user.role}
             </p>
           </div>
           <button
@@ -131,27 +161,35 @@ const NavLink = ({
   href,
   pathname,
   icon,
-  label
+  label,
+  hidden
 }: {
   href: string;
   pathname: string;
   icon: ReactNode;
   label: string;
+  hidden?: boolean;
 }) => (
-  <LinkWrapper href={href} pathname={pathname} icon={icon} label={label} />
+  <LinkWrapper href={href} pathname={pathname} icon={icon} label={label} hidden={hidden} />
 );
 
 const LinkWrapper = ({
   href,
   pathname,
   icon,
-  label
+  label,
+  hidden
 }: {
   href: string;
   pathname: string;
   icon: ReactNode;
   label: string;
+  hidden?: boolean;
 }) => {
+  if (hidden) {
+    return null;
+  }
+
   const isActive = href === "/" ? pathname === "/" : pathname.startsWith(href);
 
   return (
