@@ -325,9 +325,15 @@ const splitSections = (body: string) => {
       continue;
     }
 
-    const nextSection = detectSectionKey(line.replace(/[:\-]\s*$/, ""));
+    const isBulletLine = /^[\-\*\u2022\d\.\)]\s*/.test(line);
+    const nextSection = !isBulletLine ? detectSectionKey(line.replace(/[:\-]\s*$/, "")) : undefined;
     if (nextSection) {
       currentSection = nextSection;
+      continue;
+    }
+
+    if (/^(regards|thanks|best|cheers)[,!\s]*$/i.test(line)) {
+      currentSection = "other";
       continue;
     }
 

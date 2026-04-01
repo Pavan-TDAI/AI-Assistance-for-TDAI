@@ -4,18 +4,58 @@ import { URL } from "node:url";
 import type { SettingsRecord } from "@personal-ai/shared";
 import type { ToolDefinition } from "@personal-ai/tool-registry";
 
-const normaliseForWindows = (inputPath: string) =>
-  path.normalize(inputPath).replace(/\\/g, "/").toLowerCase();
+const windowsDrivePathPattern = /^[A-Za-z]:[\\/]/;
+const uncPathPattern = /^\\\\/;
+
+const isWindowsLikePath = (inputPath: string) =>
+  windowsDrivePathPattern.test(inputPath) || uncPathPattern.test(inputPath);
+
+const normaliseResolvedPath = (inputPath: string) => {
+  if (isWindowsLikePath(inputPath)) {
+    return path.win32.normalize(inputPath).replace(/\\/g, "/").toLowerCase();
+  }
+
+  return path.posix.normalize(inputPath.replace(/\\/g, "/"));
+};
+
+const resolvePortablePath = (inputPath: string, basePath?: string) => {
+  const candidate = inputPath.trim();
+  const base = basePath?.trim();
+
+  if (isWindowsLikePath(candidate)) {
+    return normaliseResolvedPath(
+      base && isWindowsLikePath(base)
+        ? path.win32.resolve(base, candidate)
+        : path.win32.resolve(candidate)
+    );
+  }
+
+  if (candidate.startsWith("/")) {
+    return normaliseResolvedPath(
+      base && !isWindowsLikePath(base)
+        ? path.posix.resolve(base, candidate)
+        : path.posix.resolve(candidate)
+    );
+  }
+
+  if (base) {
+    return normaliseResolvedPath(
+      isWindowsLikePath(base) ? path.win32.resolve(base, candidate) : path.resolve(base, candidate)
+    );
+  }
+
+  return normaliseResolvedPath(path.resolve(candidate));
+};
 
 const isPathWithinAnyRoot = (inputPath: string, roots: string[]) => {
   if (!roots.length) {
     return false;
   }
 
-  const resolvedPath = normaliseForWindows(path.resolve(inputPath));
+  const resolvedPath = resolvePortablePath(inputPath);
 
   return roots.some((root) => {
-    const resolvedRoot = normaliseForWindows(path.resolve(root));
+    const resolvedRoot = resolvePortablePath(root);
     return resolvedPath === resolvedRoot || resolvedPath.startsWith(`${resolvedRoot}/`);
   });
 };
@@ -59,8 +99,8 @@ export class PermissionEngine {
     if (tool.permissionCategory === "filesystem_read") {
       const filePath =
         typeof input.path === "string"
-          ? path.resolve(workingDirectory, input.path)
-          : workingDirectory;
+          ? resolvePortablePath(input.path, workingDirectory)
+          : resolvePortablePath(workingDirectory);
 
       if (approvalDefault && isPathWithinAnyRoot(filePath, settings.toolPreferences.safeRoots)) {
         return {

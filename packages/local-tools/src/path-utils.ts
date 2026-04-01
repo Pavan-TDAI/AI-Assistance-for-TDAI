@@ -1,6 +1,47 @@
 import os from "node:os";
 import path from "node:path";
 
+const windowsDrivePathPattern = /^[A-Za-z]:[\\/]/;
+const uncPathPattern = /^\\\\/;
+
+const isWindowsLikePath = (inputPath: string) =>
+  windowsDrivePathPattern.test(inputPath) || uncPathPattern.test(inputPath);
+
+const normaliseResolvedPath = (inputPath: string) => {
+  if (isWindowsLikePath(inputPath)) {
+    return path.win32.normalize(inputPath).replace(/\\/g, "/").toLowerCase();
+  }
+
+  return path.posix.normalize(inputPath.replace(/\\/g, "/"));
+};
+
+const resolvePortablePath = (inputPath: string, basePath?: string) => {
+  const candidate = inputPath.trim();
+  const base = basePath?.trim();
+
+  if (isWindowsLikePath(candidate)) {
+    return path.win32.normalize(
+      base && isWindowsLikePath(base)
+        ? path.win32.resolve(base, candidate)
+        : path.win32.resolve(candidate)
+    );
+  }
+
+  if (candidate.startsWith("/")) {
+    return path.posix.normalize(
+      base && !isWindowsLikePath(base)
+        ? path.posix.resolve(base, candidate)
+        : path.posix.resolve(candidate)
+    );
+  }
+
+  if (base) {
+    return isWindowsLikePath(base) ? path.win32.resolve(base, candidate) : path.resolve(base, candidate);
+  }
+
+  return path.resolve(candidate);
+};
+
 export const resolveInputPath = (workingDirectory: string, rawPath?: string) => {
   const candidate = rawPath?.trim() ? rawPath.trim() : workingDirectory;
   const unquoted = candidate.replace(/^["']|["']$/g, "");
@@ -10,29 +51,28 @@ export const resolveInputPath = (workingDirectory: string, rawPath?: string) => 
     return resolvedAlias;
   }
 
-  if (path.isAbsolute(unquoted)) {
-    return path.normalize(unquoted);
+  if (path.isAbsolute(unquoted) || isWindowsLikePath(unquoted)) {
+    return resolvePortablePath(unquoted);
   }
 
   if (unquoted.startsWith("~")) {
     return path.join(os.homedir(), unquoted.slice(1));
   }
 
-  return path.resolve(workingDirectory, unquoted);
+  return resolvePortablePath(unquoted, workingDirectory);
 };
 
-export const normaliseForWindows = (inputPath: string) =>
-  path.normalize(inputPath).replace(/\\/g, "/").toLowerCase();
+export const normaliseForWindows = (inputPath: string) => normaliseResolvedPath(inputPath);
 
 export const isPathWithinAnyRoot = (inputPath: string, roots: string[]) => {
   if (!roots.length) {
     return false;
   }
 
-  const normalisedPath = normaliseForWindows(path.resolve(inputPath));
+  const normalisedPath = normaliseResolvedPath(resolvePortablePath(inputPath));
 
   return roots.some((root) => {
-    const normalisedRoot = normaliseForWindows(path.resolve(root));
+    const normalisedRoot = normaliseResolvedPath(resolvePortablePath(root));
     return (
       normalisedPath === normalisedRoot ||
       normalisedPath.startsWith(`${normalisedRoot}/`)
